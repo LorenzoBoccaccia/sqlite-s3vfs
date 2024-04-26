@@ -209,8 +209,7 @@ class DDBVFSFile:
         dsize = size
         if 'Attributes' in result:
             dsize = size-int(result['Attributes']['size'])
-        self._update_total_size(dsize)
-        return True
+        return dsize
     
     def _block_delete(self, block):
         result = self._table.delete_item(
@@ -222,7 +221,7 @@ class DDBVFSFile:
         )
         assert(result['ResponseMetadata']['HTTPStatusCode'] == 200)
         dsize = -int(result['Attributes']['size'])
-        self._update_total_size(dsize)
+        return dsize
 
     def _update_total_size(self, dsize):
         result = self._table.update_item(
@@ -490,6 +489,7 @@ class DDBVFSFile:
 
     def xTruncate(self, newsize):
         total = 0
+        dsize = 0
         lek = None
         while True:
             if lek:
@@ -505,18 +505,20 @@ class DDBVFSFile:
                 to_keep = max(int(obj['size']) - total + newsize, 0)
 
                 if to_keep == 0:
-                    self._block_delete(int(obj['range']))
+                    dsize += self._block_delete(int(obj['range']))
 
                 elif to_keep < int(obj['size']):
                     bytes = self._block_get_bytes(int(obj['range']))
-                    self._block_put_bytes(int(obj['range']), bytes[:to_keep])
+                    dsize += self._block_put_bytes(int(obj['range']), bytes[:to_keep])
 
             if 'LastEvaluatedKey' not in response:
                 break
             lek = response['LastEvaluatedKey']
+        self._update_total_size(dsize)
         return True
 
     def xWrite(self, data, offset):
+        dsize = 0
         try:
             lock_page_offset = 1073741824
             page_size = len(data)
@@ -533,7 +535,7 @@ class DDBVFSFile:
                     original_block_bytes = self._block_get_bytes(block)
                     if len(original_block_bytes) == self._block_size:
                         break
-                    self._block_put_bytes(block, original_block_bytes + bytes(
+                    dsize += self._block_put_bytes(block, original_block_bytes + bytes(
                         self._block_size - len(original_block_bytes)
                     ))
 
@@ -552,7 +554,8 @@ class DDBVFSFile:
                         original_block_bytes[start+write:]
 
                 data_offset += write
-                self._block_put_bytes(block, data_to_write)
+                dsize += self._block_put_bytes(block, data_to_write)
+            self._update_total_size(dsize)
         except Exception as ex:
             print("ERROR WRITING ", ex)
             raise ex
